@@ -1,36 +1,79 @@
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Header
+from pydantic import BaseModel
+import asyncio
 
 app = FastAPI()
-rooms = {}
 
-# Allowed tokens for connection
-VALID_TOKENS = {
-    "dy467ghxxZg56SFYI_432FGdfP": True,  # This token can send messages
-    "57ghuGui56xgjjSfjppkjuu356sfgSrgh": False  # This token can only connect
-}
+# Token Authentication
+WS_TOKEN = "token1"
+POST_TOKEN = "token2"
+
+# Room Storage
+rooms = {}  # { "room_name": set([websocket1, websocket2, ...]) }
+
+
+class Message(BaseModel):
+    message: str
+
 
 @app.websocket("/ws/{room}")
-async def chat(websocket: WebSocket, room: str):
-    token = websocket.headers.get("Authorization", "").replace("Bearer ", "")
-
-    # Token မမှန်ရင် ချိတ်မပေးဘူး
-    if token not in VALID_TOKENS:
-        await websocket.close()
+async def websocket_endpoint(websocket: WebSocket, room: str, authorization: str = Header(None)):
+    """ WebSocket connection for joining a chat room """
+    # Validate token
+    if authorization != f"Bearer {WS_TOKEN}":
+        await websocket.close(code=1008)
         return
 
     await websocket.accept()
-    rooms.setdefault(room, []).append((websocket, token))
+
+    # Add client to room
+    rooms.setdefault(room, set()).add(websocket)
 
     try:
-        while True:
-            msg = await websocket.receive_text()
-            sender_token = next((t for ws, t in rooms[room] if ws == websocket), "")
-
-            # Token မှန်မှသာ message ပို့ခွင့်ပြုမယ်
-            if VALID_TOKENS.get(sender_token, False):
-                for ws, _ in rooms[room]:
-                    await ws.send_text(msg)
+        async for _ in websocket.iter_text():  # Efficient listening
+            pass
     except WebSocketDisconnect:
-        rooms[room] = [(ws, t) for ws, t in rooms[room] if ws != websocket]
-        if not rooms[room]:
+        # Remove disconnected client
+        rooms[room].discard(websocket)
+        if not rooms[room]:  # If room is empty, delete it
             del rooms[room]
+
+
+@app.post("/ws/send/{room}")
+async def send_message(room: str, data: Message, authorization: str = Header(None)):
+    """ API to send a message to all clients in a room """
+    # Validate token
+    if authorization != f"Bearer {POST_TOKEN}":
+        raise HTTPException(403, "Invalid token")
+    
+    # Check if room exists
+    if room not in rooms:
+        raise HTTPException(404, "Room not found")
+
+    # Send message to all clients
+    disconnected = []
+    for ws in rooms[room]:
+        try:
+            await ws.send_text(data.message)
+        except:
+            disconnected.append(ws)  # Mark disconnected clients
+
+    # Remove disconnected clients
+    for ws in disconnected:
+        rooms[room].discard(ws)
+
+    return {"message": "Sent", "clients": len(rooms[room])}
+
+
+@app.get("/ws/rooms")
+async def list_rooms():
+    """ API to list all active rooms and their client counts """
+    return {room: len(clients) for room, clients in rooms.items()}
+
+
+@app.get("/ws/clients/{room}")
+async def list_clients_in_room(room: str):
+    """ API to list the number of connected clients in a specific room """
+    if room not in rooms:
+        raise HTTPException(404, "Room not found")
+    return {"room": room, "clients": len(rooms[room])}
