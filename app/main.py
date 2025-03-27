@@ -1,6 +1,6 @@
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Header
 from pydantic import BaseModel
-import asyncio
+import asyncio import Form
 
 app = FastAPI()
 
@@ -39,31 +39,28 @@ async def websocket_endpoint(websocket: WebSocket, room: str, authorization: str
             del rooms[room]
 
 
+
+
 @app.post("/ws/send/{room}")
-async def send_message(room: str, data: Message, authorization: str = Header(None)):
-    """ API to send a message to all clients in a room """
-    # Validate token
+async def send_message(room: str, message: str = Form(...), authorization: str = Header(None)):
+    """Send a message using x-www-form-urlencoded"""
     if authorization != f"Bearer {POST_TOKEN}":
         raise HTTPException(403, "Invalid token")
     
-    # Check if room exists
     if room not in rooms:
         raise HTTPException(404, "Room not found")
 
-    # Send message to all clients
     disconnected = []
     for ws in rooms[room]:
         try:
-            await ws.send_text(data.message)
+            await ws.send_text(message)
         except:
-            disconnected.append(ws)  # Mark disconnected clients
+            disconnected.append(ws)
 
-    # Remove disconnected clients
     for ws in disconnected:
         rooms[room].discard(ws)
 
     return {"message": "Sent", "clients": len(rooms[room])}
-
 
 @app.get("/ws/rooms")
 async def list_rooms():
