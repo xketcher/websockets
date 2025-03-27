@@ -1,4 +1,5 @@
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Header, Form from pydantic import BaseModel
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Header, Form
+from pydantic import BaseModel
 import asyncio
 
 app = FastAPI()
@@ -38,28 +39,43 @@ async def websocket_endpoint(websocket: WebSocket, room: str, authorization: str
             del rooms[room]
 
 
-
-
 @app.post("/ws/send/{room}")
-async def send_message(room: str, message: str = Form(...), authorization: str = Header(None)):
-    """Send a message using x-www-form-urlencoded"""
+async def send_message(
+    room: str,
+    data: Message = None,  # For JSON body data
+    message: str = Form(None),  # For x-www-form-urlencoded data
+    authorization: str = Header(None)
+):
+    """ API to send a message to all clients in a room """
+    # Validate token
     if authorization != f"Bearer {POST_TOKEN}":
         raise HTTPException(403, "Invalid token")
     
+    # Check if room exists
     if room not in rooms:
         raise HTTPException(404, "Room not found")
 
+    # Determine the message type (either JSON or form data)
+    final_message = data.message if data else message
+
+    # If no message is provided, raise an error
+    if not final_message:
+        raise HTTPException(400, "Message content cannot be empty")
+
+    # Send message to all clients
     disconnected = []
     for ws in rooms[room]:
         try:
-            await ws.send_text(message)
+            await ws.send_text(final_message)
         except:
-            disconnected.append(ws)
+            disconnected.append(ws)  # Mark disconnected clients
 
+    # Remove disconnected clients
     for ws in disconnected:
         rooms[room].discard(ws)
 
     return {"message": "Sent", "clients": len(rooms[room])}
+
 
 @app.get("/ws/rooms")
 async def list_rooms():
